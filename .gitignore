@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# virtualenv
+.venv/
+
+# env files
+.env
+
+# Streamlit cache
+.streamlit/
+
+# OS
+.DS_Store
+
+# snapshots optional
+storage/snapshots/*.json

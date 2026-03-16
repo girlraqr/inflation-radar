@@ -1,0 +1,15 @@
+pandas
+numpy
+requests
+matplotlib
+PySide6
+scikit-learn
+fredapi
+yfinance
+pytest
+pytest-cov
+pyinstaller
+fastapi
+uvicorn
+fastapi
+uvicorn[standard]
