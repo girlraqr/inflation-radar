@@ -1,19 +1,96 @@
-from services.regime_service import get_regime
-from services.inflation_service import get_inflation_data
-from models.signals.asset_signals import gold_signal
+from typing import Dict, Any
+
+import pandas as pd
+
+from models.signals.asset_signals import AssetSignals
+from services.forecast_service import ForecastService
 
 
-def get_signals():
-    regime_data = get_regime()
-    inflation_data = get_inflation_data()
+class SignalService:
+    """
+    Signal Service v3
 
-    regime = regime_data["regime"]
-    real_inflation_value = float(inflation_data.get("nowcast_value", 0))
-    interest_rate = float(inflation_data.get("monetary_score", 0))
+    Pipeline:
+    ForecastService → echte Inflation (Dataset) → Signal Engine v3
+    """
 
-    signal = gold_signal(real_inflation_value, interest_rate)
+    def __init__(self):
+        self.forecast_service = ForecastService()
+        self.signal_engine = AssetSignals()
 
-    return {
-        "regime": regime,
-        "gold_signal": signal,
-    }
+    # --------------------------------------------------
+    # PUBLIC API
+    # --------------------------------------------------
+
+    def get_signals(self) -> Dict[str, Any]:
+        """
+        Hauptfunktion:
+        Holt Forecasts + echte Inflation und generiert Signale
+        """
+
+        forecast_data = self._get_forecast_data()
+
+        signals = self.signal_engine.generate_signals(forecast_data)
+
+        return {
+            "status": "ok",
+            "forecast_input": forecast_data,
+            "signals": signals,
+        }
+
+    # --------------------------------------------------
+    # FORECAST + REAL CPI (FINAL FIX)
+    # --------------------------------------------------
+
+    def _get_forecast_data(self) -> Dict[str, float]:
+        """
+        Kombiniert:
+        - echte aktuelle Inflation (CPI YoY)
+        - ML Forecasts (1M / 3M / 6M)
+        """
+
+        forecast = self.forecast_service.get_inflation_forecast()
+        forecasts = forecast["forecasts"]
+
+        # ML Forecasts
+        f1 = forecasts["1m"]["forecast"]
+        f3 = forecasts["3m"]["forecast"]
+        f6 = forecasts["6m"]["forecast"]
+
+        # 🔥 echte Inflation
+        current = self._get_latest_cpi_yoy()
+
+        return {
+            "current_inflation": float(current),
+            "forecast_1m": float(f1),
+            "forecast_3m": float(f3),
+            "forecast_6m": float(f6),
+        }
+
+    # --------------------------------------------------
+    # REAL CPI (WICHTIG)
+    # --------------------------------------------------
+
+    def _get_latest_cpi_yoy(self) -> float:
+        """
+        Holt die echte aktuelle Inflation (CPI YoY)
+        aus deinem ML Dataset
+        """
+
+        df = pd.read_csv(
+            "storage/cache/ml_dataset.csv",
+            index_col="date",
+            parse_dates=True
+        )
+
+        if "cpi_yoy" not in df.columns:
+            raise ValueError("cpi_yoy fehlt im Dataset")
+
+        series = df["cpi_yoy"].dropna()
+
+        if len(series) == 0:
+            raise ValueError("Keine gültigen cpi_yoy Werte gefunden")
+
+        latest_value = series.iloc[-1]
+
+        return float(latest_value)

@@ -5,7 +5,7 @@ import os
 load_dotenv()
 
 # FRED API Key
-FRED_API_KEY = os.getenv("FRED_API_KEY")
+FRED_API_KEY = "e8f4311537ce3912928fcea4d0a27e66"
 
 
 # --------------------------------------------------

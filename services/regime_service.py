@@ -1,15 +1,20 @@
-from services.inflation_service import get_inflation_data
-from models.regime.regime_engine import inflation_regime
+from services.inflation_service import InflationService
+from models.regime.regime_engine import detect_regime
 
 
-def get_regime():
-    inflation_data = get_inflation_data()
+class RegimeService:
 
-    nowcast_value = float(inflation_data.get("nowcast_value", 0))
+    @staticmethod
+    def get_regime():
 
-    regime = inflation_regime(nowcast_value)
+        inflation_data = InflationService.get_inflation_data()
 
-    return {
-        "inflation_nowcast": nowcast_value,
-        "regime": regime,
-    }
+        inflation_value = float(inflation_data.get("real_inflation", 0))
+
+        regime = detect_regime(inflation_value)
+
+        return {
+            "regime": regime,
+            "real_inflation": inflation_value,
+            "nowcast": inflation_data.get("nowcast_value"),
+        }
