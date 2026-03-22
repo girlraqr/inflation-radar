@@ -1,23 +1,73 @@
 import pandas as pd
+
 from models.ml.feature_engineering import FeatureEngineering
 
-print("Feature Engineering gestartet")
 
-df = pd.read_csv(
-    "storage/cache/ml_dataset.csv",
-    index_col="date",
-    parse_dates=True
-)
-print(type(df.index))
-print(df.index[:5])
-print("Dataset geladen")
-print(df.tail())
+def rename_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    🔥 Mapping deiner Spalten → Feature Engine erwartet
+    """
 
-features = FeatureEngineering(df)
-feature_df = features.create_features()
+    mapping = {
+        "oil_price": "wti_oil",
+        "fed_rate": "fed_funds",
+        "10y_treasury": "ust_10y",
+        "2y_treasury": "ust_2y",
+        "sp500": "sp500",  # ok
+        "m2": "money_supply",
+        "unemployment": "unemployment_rate",
+    }
 
-feature_df.to_csv("storage/cache/ml_features.csv")
+    df = df.rename(columns=mapping)
 
-print("Feature Dataset erstellt")
-print(feature_df.tail())
-print("Shape:", feature_df.shape)
+    print("✅ Columns mapped")
+
+    return df
+
+
+def main():
+
+    print("🚀 Feature Engineering gestartet")
+
+    # --------------------------------------------------
+    # LOAD DATASET
+    # --------------------------------------------------
+
+    path = "storage/cache/ml_dataset.csv"
+
+    df = pd.read_csv(path, index_col=0, parse_dates=True)
+
+    print("Dataset geladen")
+    print(df.tail())
+
+    # --------------------------------------------------
+    # 🔥 FIX: COLUMN MAPPING
+    # --------------------------------------------------
+
+    df = rename_columns(df)
+
+    # --------------------------------------------------
+    # FEATURE ENGINEERING
+    # --------------------------------------------------
+
+    features = FeatureEngineering(df)
+
+    feature_df = features.create_features()
+
+    print("Feature Dataset erstellt")
+    print(feature_df.tail())
+    print("Shape:", feature_df.shape)
+
+    # --------------------------------------------------
+    # SAVE
+    # --------------------------------------------------
+
+    output_path = "storage/cache/ml_features.csv"
+
+    feature_df.to_csv(output_path)
+
+    print(f"💾 Saved → {output_path}")
+
+
+if __name__ == "__main__":
+    main()

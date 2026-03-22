@@ -1,15 +1,12 @@
 {
   "1m": {
-    "mae": 0.4662368818072937,
-    "rmse": 0.6890788959732882,
-    "directional_accuracy": 0.559322033898305,
-    "naive_mae": 0.2936957679170226,
-    "skill": -0.5874824656616056
+    "mae": 0.3922252606621763,
+    "rmse": 0.5715036056555353
   },
   "3m": {
-    "direction_accuracy": 0.704
+    "direction_accuracy": 0.5859649122807018
   },
   "6m": {
-    "direction_accuracy": 0.704
+    "direction_accuracy": 0.6232394366197183
   }
 }

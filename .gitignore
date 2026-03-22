@@ -18,3 +18,22 @@ __pycache__/
 # snapshots optional
 storage/snapshots/*.json
 storage/snapshots/*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+
+# Environment
+.env
+
+# Data / Models
+storage/cache/*.csv
+storage/cache/*.joblib
+storage/*.db
+storage/*.json
+
+# OS
+.DS_Store

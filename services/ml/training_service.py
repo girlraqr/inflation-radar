@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 
@@ -50,20 +51,7 @@ def walk_forward_regression(df, features, target, horizon):
 
         pred = model.predict(X_test)[0]
 
-        # --------------------------------------------------
-        # DELTA → LEVEL (für 3M / 6M)
-        # --------------------------------------------------
-
-        if horizon in ["3m", "6m"]:
-            horizon_steps = int(horizon.replace("m", ""))
-
-            current = df.iloc[i]["cpi_yoy"]
-            pred = current + pred
-
-            actual = df.iloc[i + horizon_steps]["cpi_yoy"]
-
-        else:
-            actual = df.iloc[i]["target_1m"]
+        actual = df.iloc[i]["target_1m"]
 
         predictions.append(pred)
         actuals.append(actual)
@@ -72,7 +60,7 @@ def walk_forward_regression(df, features, target, horizon):
 
 
 # --------------------------------------------------
-# WALK-FORWARD CLASSIFICATION (🔥 FIX)
+# WALK-FORWARD CLASSIFICATION
 # --------------------------------------------------
 
 def walk_forward_classification(df, features, target, horizon):
@@ -106,7 +94,7 @@ def walk_forward_classification(df, features, target, horizon):
 
 
 # --------------------------------------------------
-# METRICS (Regression)
+# METRICS
 # --------------------------------------------------
 
 def compute_regression_metrics(y_true, y_pred):
@@ -128,38 +116,9 @@ def compute_regression_metrics(y_true, y_pred):
     mae = np.mean(np.abs(y_true - y_pred))
     rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
 
-    # Directional Accuracy
-    if len(y_true) > 1:
-        y_true_diff = np.diff(y_true)
-        y_pred_diff = np.diff(y_pred)
-
-        directional = np.mean(np.sign(y_true_diff) == np.sign(y_pred_diff))
-    else:
-        directional = np.nan
-
-    # Naive Benchmark
-    naive = pd.Series(y_true).shift(1).values
-
-    valid_mask = ~np.isnan(y_true[1:]) & ~np.isnan(naive[1:])
-
-    if valid_mask.sum() == 0:
-        naive_mae = np.nan
-    else:
-        naive_mae = np.mean(
-            np.abs(y_true[1:][valid_mask] - naive[1:][valid_mask])
-        )
-
-    if naive_mae == 0 or np.isnan(naive_mae):
-        skill = np.nan
-    else:
-        skill = 1 - (mae / naive_mae)
-
     return {
         "mae": float(mae),
-        "rmse": float(rmse),
-        "directional_accuracy": float(directional),
-        "naive_mae": float(naive_mae),
-        "skill": float(skill)
+        "rmse": float(rmse)
     }
 
 
@@ -176,16 +135,34 @@ def train_all_models(df: pd.DataFrame):
         print(f"\n🚀 Training {horizon}")
 
         target_reg, target_clf = get_targets(horizon)
-        features = FEATURE_SETS[horizon]
+        base_features = FEATURE_SETS[horizon]
 
-        df_clean = df.dropna(subset=features + [target_reg]).copy()
+        # 🔥 FIX: nur vorhandene Features nutzen
+        features = [f for f in base_features if f in df.columns]
+
+        if len(features) < 3:
+            raise ValueError(f"Zu wenige Features für {horizon}: {features}")
+
+        print(f"✅ Features: {features}")
+
+        # 🔥 FIX: required cols korrekt
+        required_cols = features + [target_reg]
+        if target_clf:
+            required_cols.append(target_clf)
+
+        missing = [col for col in required_cols if col not in df.columns]
+        if missing:
+            raise ValueError(f"Fehlende Spalten: {missing}")
+
+        df_clean = df[required_cols].dropna().copy()
+
+        print(f"📊 Rows: {len(df_clean)}")
 
         model = InflationModel(horizon)
 
-        # --------------------------------------------------
-        # REGRESSION (nur 1M relevant)
-        # --------------------------------------------------
-
+        # -------------------------
+        # 1M Regression
+        # -------------------------
         if horizon == "1m":
 
             preds, actuals = walk_forward_regression(
@@ -199,17 +176,13 @@ def train_all_models(df: pd.DataFrame):
 
             print(f"{horizon} Metrics:", metrics)
 
-            X = df_clean[features]
-            y = df_clean[target_reg]
-
-            model.fit(X, y_reg=y)
+            model.fit(df_clean[features], y_reg=df_clean[target_reg])
 
             results[horizon] = metrics
 
-        # --------------------------------------------------
-        # CLASSIFICATION (3M / 6M)
-        # --------------------------------------------------
-
+        # -------------------------
+        # 3M / 6M Classification
+        # -------------------------
         else:
 
             preds, actuals = walk_forward_classification(
@@ -221,25 +194,65 @@ def train_all_models(df: pd.DataFrame):
 
             accuracy = (preds == actuals).mean()
 
-            print(f"{horizon} Direction Accuracy: {accuracy:.4f}")
+            print(f"{horizon} Accuracy: {accuracy:.4f}")
 
-            # Final Training
-            X = df_clean[features]
-            y_reg = df_clean[target_reg]
-            y_clf = df_clean[target_clf]
-
-            model.fit(X, y_reg=y_reg, y_clf=y_clf)
+            model.fit(
+                df_clean[features],
+                y_reg=df_clean[target_reg],
+                y_clf=df_clean[target_clf]
+            )
 
             results[horizon] = {
                 "direction_accuracy": float(accuracy)
             }
-
-        # --------------------------------------------------
-        # SAVE MODEL
-        # --------------------------------------------------
 
         model.save_model(f"storage/cache/inflation_model_{horizon}.joblib")
 
     save_model_metrics(results)
 
     return results
+
+
+# --------------------------------------------------
+# SERVICE WRAPPER
+# --------------------------------------------------
+
+class TrainingService:
+
+    @staticmethod
+    def run_full_pipeline(deploy: bool = True):
+
+        print("🚀 Starting training pipeline...")
+
+        df_dataset = pd.read_csv(
+            "storage/cache/ml_dataset.csv",
+            index_col=0,
+            parse_dates=True
+        )
+
+        df_features = pd.read_csv(
+            "storage/cache/ml_features.csv",
+            index_col=0,
+            parse_dates=True
+        )
+
+        df = df_dataset.copy()
+
+        # 🔥 SAFE MERGE
+        for col in df_features.columns:
+            if col not in df.columns:
+                df[col] = df_features[col]
+
+        print(f"✅ Final DF: {df.shape}")
+
+        return train_all_models(df)
+
+    @staticmethod
+    def run_training_by_mode():
+
+        from storage.training_config import get_mode
+
+        if get_mode() == "manual":
+            return {"status": "skipped"}
+
+        return TrainingService.run_full_pipeline()
