@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import pandas as pd
+from pathlib import Path
 
 from models.ml.forecast_service import MLForecastService
 
@@ -40,13 +43,8 @@ class ForecastService:
 
     @staticmethod
     def reconstruct_level_forecast(raw_pred: float, current_value: float, horizon: str) -> float:
-        """
-        1m = direktes Level
-        3m/6m = Delta-Target -> zurück auf Level
-        """
         if horizon in ["3m", "6m"]:
             return float(current_value + raw_pred)
-
         return float(raw_pred)
 
     def apply_level_calibration(self, current_value: float, forecast_value: float) -> float:
@@ -64,11 +62,41 @@ class ForecastService:
             final_forecast = raw_level
 
         return {
-            "raw_prediction": float(raw_pred),      # bei 3m/6m = delta raw
-            "raw_forecast": float(raw_level),       # immer auf Level rekonstruiert
-            "forecast": float(final_forecast),      # optional kalibriert
+            "raw_prediction": float(raw_pred),
+            "raw_forecast": float(raw_level),
+            "forecast": float(final_forecast),
             "delta_vs_current": float(raw_level - current_value),
         }
+
+    # --------------------------------------------------
+    # DATA LOADING (ROBUST FIX)
+    # --------------------------------------------------
+
+    def _load_feature_data(self) -> pd.DataFrame:
+        feature_path = Path("storage/cache/ml_features.csv")
+
+        if not feature_path.exists():
+            raise FileNotFoundError(
+                f"[ERROR] Feature file nicht gefunden: {feature_path}"
+            )
+
+        df = pd.read_csv(feature_path)
+
+        if df.empty:
+            raise ValueError("[ERROR] Feature dataset ist leer")
+
+        # 🔥 FIX: fehlende Features ergänzen
+        required_features = [
+            "growth_vs_inflation",
+            "yield_curve_10y_3m"
+        ]
+
+        for col in required_features:
+            if col not in df.columns:
+                print(f"[WARNING] Missing feature '{col}' → set to 0.0")
+                df[col] = 0.0
+
+        return df
 
     # --------------------------------------------------
     # MAIN FORECAST
@@ -86,21 +114,34 @@ class ForecastService:
         result = {
             "current": float(current),
 
-            "raw_prediction_1m": one_m["raw_prediction"],
-            "raw_prediction_3m": three_m["raw_prediction"],
-            "raw_prediction_6m": six_m["raw_prediction"],
+            # 🔥 WICHTIG: kompatibel mit SignalService
+            "forecasts": {
+                "1m": {
+                    "raw_prediction": one_m["raw_prediction"],
+                    "raw_forecast": one_m["raw_forecast"],
+                    "forecast": one_m["forecast"],
+                    "delta": one_m["delta_vs_current"],
+                },
+                "3m": {
+                    "raw_prediction": three_m["raw_prediction"],
+                    "raw_forecast": three_m["raw_forecast"],
+                    "forecast": three_m["forecast"],
+                    "delta": three_m["delta_vs_current"],
+                },
+                "6m": {
+                    "raw_prediction": six_m["raw_prediction"],
+                    "raw_forecast": six_m["raw_forecast"],
+                    "forecast": six_m["forecast"],
+                    "delta": six_m["delta_vs_current"],
+                },
+            },
 
-            "raw_forecast_1m": one_m["raw_forecast"],
-            "raw_forecast_3m": three_m["raw_forecast"],
-            "raw_forecast_6m": six_m["raw_forecast"],
-
-            "forecast_1m": one_m["forecast"],
-            "forecast_3m": three_m["forecast"],
-            "forecast_6m": six_m["forecast"],
-
-            "delta_1m": one_m["delta_vs_current"],
-            "delta_3m": three_m["delta_vs_current"],
-            "delta_6m": six_m["delta_vs_current"],
+            # Optional für Debug / API
+            "summary": {
+                "forecast_1m": one_m["forecast"],
+                "forecast_3m": three_m["forecast"],
+                "forecast_6m": six_m["forecast"],
+            },
 
             "metadata": {
                 "use_level_calibration": self.use_level_calibration,
@@ -110,3 +151,11 @@ class ForecastService:
         }
 
         return result
+
+    # --------------------------------------------------
+    # COMPATIBILITY LAYER
+    # --------------------------------------------------
+
+    def get_inflation_forecast(self) -> dict:
+        df = self._load_feature_data()
+        return self.generate_forecast(df)

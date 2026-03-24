@@ -8,10 +8,10 @@ from services.forecast_service import ForecastService
 
 class SignalService:
     """
-    Signal Service v3
+    Signal Service v4
 
     Pipeline:
-    ForecastService → echte Inflation (Dataset) → Signal Engine v3
+    ForecastService → echte Inflation → Signal Engine
     """
 
     def __init__(self):
@@ -32,14 +32,19 @@ class SignalService:
 
         signals = self.signal_engine.generate_signals(forecast_data)
 
+        # 🔥 CLEAN API OUTPUT
         return {
-            "status": "ok",
-            "forecast_input": forecast_data,
+            "macro": {
+                "current_inflation": forecast_data["current_inflation"],
+                "forecast_1m": forecast_data["forecast_1m"],
+                "forecast_3m": forecast_data["forecast_3m"],
+                "forecast_6m": forecast_data["forecast_6m"],
+            },
             "signals": signals,
         }
 
     # --------------------------------------------------
-    # FORECAST + REAL CPI (FINAL FIX)
+    # FORECAST + REAL CPI
     # --------------------------------------------------
 
     def _get_forecast_data(self) -> Dict[str, float]:
@@ -57,7 +62,7 @@ class SignalService:
         f3 = forecasts["3m"]["forecast"]
         f6 = forecasts["6m"]["forecast"]
 
-        # 🔥 echte Inflation
+        # echte Inflation
         current = self._get_latest_cpi_yoy()
 
         return {
@@ -68,7 +73,7 @@ class SignalService:
         }
 
     # --------------------------------------------------
-    # REAL CPI (WICHTIG)
+    # REAL CPI
     # --------------------------------------------------
 
     def _get_latest_cpi_yoy(self) -> float:
