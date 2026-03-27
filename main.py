@@ -2,12 +2,31 @@ import sys
 import argparse
 from datetime import datetime, timezone
 
-from data.data_fetcher import run_pipeline
-from models.signals import gold_signal, inflation_regime
+from fastapi import FastAPI
 
+# Router
+from api.routes.portfolio_routes import router as portfolio_router
+from api.routes.auth.auth_routes import router as auth_router
+
+# (Optional: weitere Router hier einbinden)
+# from api.routes.signal_routes import router as signal_router
+
+
+# =========================
+# FASTAPI APP
+# =========================
+
+app = FastAPI(title="Inflation Radar API")
+app.include_router(auth_router)
+app.include_router(portfolio_router)
+# app.include_router(signal_router)
+
+
+# =========================
+# CLI (optional behalten)
+# =========================
 
 def print_header():
-
     now = datetime.now(timezone.utc)
 
     print("\n")
@@ -19,80 +38,36 @@ def print_header():
     print("\n")
 
 
-def print_report(result):
-
-    real_inflation = result["real_inflation_estimate"]
-    official_cpi = result["official_cpi"]
-    hidden = result["hidden_inflation"]
-
-    consumer = result["consumer_score"]
-    monetary = result["monetary_score"]
-    asset = result["asset_score"]
-
-    regime = inflation_regime(real_inflation)
-
-    # Gold reagiert eher auf monetären Druck
-    signal = gold_signal(real_inflation, monetary)
-
-    print("Inflation Scores")
-    print("-" * 30)
-
-    print(f"Consumer Inflation Score : {consumer:.2f}")
-    print(f"Monetary Pressure Score : {monetary:.2f}")
-    print(f"Asset Inflation Score   : {asset:.2f}")
-
-    print("\nOfficial vs Real Inflation")
-    print("-" * 30)
-
-    print(f"Official CPI            : {official_cpi:.2f} %")
-    print(f"Real Inflation Estimate : {real_inflation:.2f} %")
-    print(f"Hidden Inflation        : {hidden:.2f} %")
-
-    print("\nMarket Signals")
-    print("-" * 30)
-
-    print(f"Inflation Regime        : {regime}")
-    print(f"Gold Hedge Signal       : {signal}")
-
-    print("\n")
-
-
 def run_cli():
+    """
+    Minimal CLI fallback (Pipeline wurde entfernt).
+    Kann später wieder erweitert werden.
+    """
 
     parser = argparse.ArgumentParser(
-        description="Real Inflation Radar"
+        description="Inflation Radar CLI (minimal mode)"
     )
 
     parser.add_argument(
-        "--json",
+        "--health",
         action="store_true",
-        help="Return result as JSON"
+        help="Check if system is running",
     )
 
     args = parser.parse_args()
 
-    try:
+    if args.health:
+        print("OK — Inflation Radar running")
+        return
 
-        result = run_pipeline()
+    print_header()
+    print("CLI pipeline currently disabled.")
+    print("Use API instead: http://127.0.0.1:8000")
 
-    except Exception as e:
 
-        print("Pipeline failed")
-        print(e)
-
-        sys.exit(1)
-
-    if args.json:
-
-        import json
-
-        print(json.dumps(result, indent=2))
-
-    else:
-
-        print_header()
-        print_report(result)
-
+# =========================
+# ENTRYPOINT
+# =========================
 
 def main():
     run_cli()

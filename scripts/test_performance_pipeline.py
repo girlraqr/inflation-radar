@@ -1,0 +1,36 @@
+from services.portfolio_engine_service import PortfolioEngineService
+from services.signal_ranking_service import SignalRankingService
+from live.services.allocation_snapshot_service import AllocationSnapshotService
+
+
+def run_test(user_id: int = 1):
+    print("=== TEST: PERFORMANCE PIPELINE ===")
+
+    ranking_service = SignalRankingService()
+    portfolio_service = PortfolioEngineService()
+    snapshot_service = AllocationSnapshotService()
+
+    print("-> fetching ranked signals...")
+    signals = ranking_service.get_ranked_signals(user_id=user_id, premium=True)
+
+    print(f"signals: {len(signals) if signals else 0}")
+
+    print("-> building portfolio...")
+    portfolio = portfolio_service.build_portfolio(
+        user_id=user_id,
+        ranked_signals=signals or [],
+        persist_snapshot=False,  # IMPORTANT: wir triggern selbst
+    )
+
+    print("-> persisting snapshot + triggering performance...")
+    result = snapshot_service.persist_snapshot(
+        user_id=user_id,
+        portfolio=portfolio,
+    )
+
+    print("RESULT:")
+    print(result)
+
+
+if __name__ == "__main__":
+    run_test()
