@@ -200,17 +200,17 @@ def get_portfolio_performance(
             force_recompute=force_recompute,
         )
 
+        # -------------------------
+        # FREE USER (unverändert)
+        # -------------------------
         if not is_premium:
             return _mask_free_performance_payload(result)
 
-        # 🔥 FIX HIER (korrekt eingerückt)
-        summary = result.summary
-
-        if isinstance(summary, dict) and "base" in summary:
-            summary = summary["base"]
-
+        # -------------------------
+        # PREMIUM USER (🔥 FIX)
+        # -------------------------
         return {
-            "summary": summary,
+            "summary": result.summary,  # 🔥 GANZ WICHTIG → NICHT MEHR FLATTEN
             "signal_accuracy": result.signal_accuracy,
             "intelligence": result.intelligence,
             "meta": result.meta,

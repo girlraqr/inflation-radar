@@ -76,6 +76,18 @@ class PerformanceEngineService:
             risk_summary = self._build_summary(risk_history)
 
         # ---------------------------------------------------
+        # ALPHA ANALYSIS (NEU)
+        # ---------------------------------------------------
+
+        alpha_analysis = {}
+
+        if base_summary and risk_summary:
+            alpha_analysis = self._compute_alpha_metrics(
+                base_summary,
+                risk_summary,
+            )
+
+        # ---------------------------------------------------
         # RETURN
         # ---------------------------------------------------
 
@@ -83,6 +95,7 @@ class PerformanceEngineService:
             summary={
                 "base": base_summary,
                 "risk_adjusted": risk_summary,
+                "alpha_analysis": alpha_analysis,  # 🔥 NEU
             },
             history=base_history.to_dict(orient="records"),
             signal_accuracy={
@@ -217,4 +230,48 @@ class PerformanceEngineService:
             "latest_value": float(df["portfolio_value"].iloc[-1]),
             "latest_period_return": float(df["period_return"].iloc[-1]),
             "latest_cumulative_return": float(total_return),
+        }
+
+    # ---------------------------------------------------
+    # ALPHA ENGINE (NEU)
+    # ---------------------------------------------------
+
+    def _compute_alpha_metrics(
+        self,
+        base: Dict[str, Any],
+        risk: Dict[str, Any],
+    ) -> Dict[str, float]:
+
+        if not base or not risk:
+            return {}
+
+        base_return = float(base.get("total_return", 0.0))
+        risk_return = float(risk.get("total_return", 0.0))
+
+        base_vol = float(base.get("volatility", 0.0))
+        risk_vol = float(risk.get("volatility", 0.0))
+
+        base_dd = float(base.get("max_drawdown", 0.0))
+        risk_dd = float(risk.get("max_drawdown", 0.0))
+
+        # --- Core Metrics ---
+        return_delta = risk_return - base_return
+
+        volatility_reduction = (
+            (base_vol - risk_vol) / base_vol if base_vol != 0 else 0.0
+        )
+
+        drawdown_reduction = (
+            (base_dd - risk_dd) / base_dd if base_dd != 0 else 0.0
+        )
+
+        # --- Efficiency ---
+        denom = abs(volatility_reduction) + abs(drawdown_reduction)
+        efficiency_score = return_delta / denom if denom != 0 else 0.0
+
+        return {
+            "return_delta": return_delta,
+            "volatility_reduction": volatility_reduction,
+            "drawdown_reduction": drawdown_reduction,
+            "efficiency_score": efficiency_score,
         }

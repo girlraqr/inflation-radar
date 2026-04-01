@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+
+# =========================
+# SIGNAL ACCURACY
+# =========================
 
 class SignalRuleStatsSchema(BaseModel):
     label: str
@@ -19,6 +23,10 @@ class SignalAccuracySchema(BaseModel):
     by_signal: dict[str, SignalRuleStatsSchema]
 
 
+# =========================
+# INTELLIGENCE
+# =========================
+
 class IntelligenceNarrativeSchema(BaseModel):
     title: str
     status: str
@@ -33,6 +41,10 @@ class IntelligenceOverlaySchema(BaseModel):
     narratives: list[IntelligenceNarrativeSchema]
 
 
+# =========================
+# BASE PERFORMANCE (ALT)
+# =========================
+
 class PortfolioPerformanceSummarySchema(BaseModel):
     observations: int
     total_return: float
@@ -45,6 +57,42 @@ class PortfolioPerformanceSummarySchema(BaseModel):
     latest_cumulative_return: float
 
 
+# =========================
+# ALPHA ENGINE (NEU)
+# =========================
+
+class AlphaAnalysisSchema(BaseModel):
+    return_delta: float
+    volatility_reduction: float
+    drawdown_reduction: float
+    efficiency_score: float
+
+
+# =========================
+# NEUE SUMMARY STRUKTUR
+# =========================
+
+class PortfolioPerformanceCompositeSummarySchema(BaseModel):
+    base: PortfolioPerformanceSummarySchema
+    risk_adjusted: Optional[PortfolioPerformanceSummarySchema]
+    alpha_analysis: Optional[AlphaAnalysisSchema]
+
+
+# =========================
+# RESPONSE
+# =========================
+
+class PortfolioPerformanceResponseSchema(BaseModel):
+    summary: PortfolioPerformanceCompositeSummarySchema
+    signal_accuracy: SignalAccuracySchema
+    intelligence: IntelligenceOverlaySchema
+    meta: dict[str, Any] | None = None
+
+
+# =========================
+# HISTORY
+# =========================
+
 class PortfolioHistoryPointSchema(BaseModel):
     date: str
     period_return: float
@@ -53,13 +101,6 @@ class PortfolioHistoryPointSchema(BaseModel):
     rolling_peak: float
     drawdown: float
     weights: dict[str, float]
-
-
-class PortfolioPerformanceResponseSchema(BaseModel):
-    summary: PortfolioPerformanceSummarySchema
-    signal_accuracy: SignalAccuracySchema
-    intelligence: IntelligenceOverlaySchema
-    meta: dict[str, Any] | None = None
 
 
 class PortfolioHistoryResponseSchema(BaseModel):
