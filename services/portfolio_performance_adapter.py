@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import pandas as pd
-
 from live.repository.allocation_repository import AllocationRepository
 from live.repository.performance_repository import PortfolioPerformanceRepository
 from services.performance_engine_service import PerformanceEngineService
@@ -23,15 +21,28 @@ class PortfolioPerformanceAdapter:
     def __init__(self) -> None:
         self.allocation_repository = AllocationRepository()
         self.performance_repository = PortfolioPerformanceRepository()
-        self.performance_engine = PerformanceEngineService(repository=self.performance_repository)
+
+        # 🔥 WICHTIG: KEIN repository=... mehr!
+        self.performance_engine = PerformanceEngineService()
+
+    # ---------------------------------------------------
+    # MAIN PERFORMANCE
+    # ---------------------------------------------------
 
     def get_performance_for_user(
         self,
         user_id: int,
         force_recompute: bool = False,
     ) -> PortfolioPerformanceAdapterResult:
+
+        # -----------------------------------------
+        # Optional DB Cache (kannst du später wieder nutzen)
+        # -----------------------------------------
         if not force_recompute:
-            db_payload = self.performance_repository.get_latest_summary_payload(user_id=user_id)
+            db_payload = self.performance_repository.get_latest_summary_payload(
+                user_id=user_id
+            )
+
             if db_payload is not None:
                 return PortfolioPerformanceAdapterResult(
                     summary=db_payload["summary"],
@@ -41,16 +52,11 @@ class PortfolioPerformanceAdapter:
                     meta=db_payload["meta"],
                 )
 
-        allocation_snapshots = self._load_allocation_snapshots(user_id)
-        asset_returns = self._load_asset_returns()
-        signal_history = self._load_signal_history()
-
+        # -----------------------------------------
+        # 🔥 NEUE ENGINE (DB-driven)
+        # -----------------------------------------
         result = self.performance_engine.build_performance(
-            user_id=user_id,
-            allocation_snapshots=allocation_snapshots,
-            asset_returns=asset_returns,
-            signal_history=signal_history,
-            starting_value=100.0,
+            user_id=user_id
         )
 
         return PortfolioPerformanceAdapterResult(
@@ -58,23 +64,20 @@ class PortfolioPerformanceAdapter:
             history=result.history,
             signal_accuracy=result.signal_accuracy,
             intelligence=result.intelligence,
-            meta={"source": "computed"},
+            meta=result.meta,
         )
+
+    # ---------------------------------------------------
+    # HISTORY
+    # ---------------------------------------------------
 
     def get_history_for_user(
         self,
         user_id: int,
     ) -> PortfolioPerformanceAdapterResult:
-        allocation_snapshots = self._load_allocation_snapshots(user_id)
-        asset_returns = self._load_asset_returns()
-        signal_history = self._load_signal_history()
 
         result = self.performance_engine.build_performance(
-            user_id=user_id,
-            allocation_snapshots=allocation_snapshots,
-            asset_returns=asset_returns,
-            signal_history=signal_history,
-            starting_value=100.0,
+            user_id=user_id
         )
 
         return PortfolioPerformanceAdapterResult(
@@ -82,20 +85,5 @@ class PortfolioPerformanceAdapter:
             history=result.history,
             signal_accuracy=result.signal_accuracy,
             intelligence=result.intelligence,
-            meta={"source": "computed"},
+            meta=result.meta,
         )
-
-    def _load_allocation_snapshots(self, user_id: int) -> pd.DataFrame:
-        rows = self.allocation_repository.get_user_snapshots(user_id=user_id)
-        return pd.DataFrame(rows)
-
-    def _load_asset_returns(self) -> pd.DataFrame:
-        df = pd.read_csv("storage/cache/asset_returns.csv")
-        df["date"] = pd.to_datetime(df["date"])
-        return df.set_index("date")
-
-    def _load_signal_history(self) -> pd.DataFrame:
-        try:
-            return pd.read_csv("storage/cache/signal_history.csv")
-        except FileNotFoundError:
-            return pd.DataFrame()

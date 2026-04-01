@@ -2,141 +2,149 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any
+from typing import Any, Dict, List, Optional
 
-from storage.database import get_connection
+DEFAULT_DB_PATH = "storage/app.db"
 
 
 class AllocationRepository:
-    def __init__(self) -> None:
-        self._connection_factory = get_connection
+    def __init__(self, db_path: str = DEFAULT_DB_PATH) -> None:
+        self.db_path = db_path
+        self._ensure_table()
 
-    # =========================
-    # WRITE
-    # =========================
+    # ---------------------------------------------------
+    # TABLE SETUP (robust gegen beide Spalten)
+    # ---------------------------------------------------
 
-    def upsert_snapshot(
+    def _ensure_table(self) -> None:
+        conn = sqlite3.connect(self.db_path)
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS allocation_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                generated_at TEXT NOT NULL,
+                snapshot_date TEXT NOT NULL,
+                weights TEXT,
+                positions TEXT,
+                signals TEXT,
+                meta TEXT
+            )
+            """
+        )
+
+        conn.commit()
+        conn.close()
+
+    # ---------------------------------------------------
+    # INSERT (immer neue Zeile)
+    # ---------------------------------------------------
+
+    def insert_snapshot(
         self,
         user_id: int,
         snapshot_date: str,
-        generated_at: str,
-        rebalance_required: int,
-        rebalance_reason: str,
-        total_invested_weight: float,
-        cash_weight: float,
-        allocation_hint: str,
-        weights: str,
-        positions: str,
-        signals: str,
-        meta: str,
+        weights: Dict[str, float],
+        positions: List[Dict[str, Any]],
+        signals: List[Dict[str, Any]],
+        meta: Dict[str, Any],
     ) -> None:
 
-        with self._connection_factory() as conn:
-            conn.execute(
-                """
-                INSERT INTO allocation_snapshots (
-                    user_id,
-                    snapshot_date,
-                    generated_at,
-                    rebalance_required,
-                    rebalance_reason,
-                    total_invested_weight,
-                    cash_weight,
-                    allocation_hint,
-                    weights,
-                    positions,
-                    signals,
-                    meta
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(user_id, snapshot_date)
-                DO UPDATE SET
-                    generated_at = excluded.generated_at,
-                    rebalance_required = excluded.rebalance_required,
-                    rebalance_reason = excluded.rebalance_reason,
-                    total_invested_weight = excluded.total_invested_weight,
-                    cash_weight = excluded.cash_weight,
-                    allocation_hint = excluded.allocation_hint,
-                    weights = excluded.weights,
-                    positions = excluded.positions,
-                    signals = excluded.signals,
-                    meta = excluded.meta
-                """,
-                (
-                    user_id,
-                    snapshot_date,
-                    generated_at,
-                    rebalance_required,
-                    rebalance_reason,
-                    total_invested_weight,
-                    cash_weight,
-                    allocation_hint,
-                    weights,
-                    positions,
-                    signals,
-                    meta,
-                ),
-            )
-            conn.commit()
+        conn = sqlite3.connect(self.db_path)
 
-    # =========================
-    # READ
-    # =========================
-
-    def get_user_snapshots(
-        self,
-        user_id: int,
-        limit: int | None = None,
-    ) -> list[dict[str, Any]]:
-
-        with self._connection_factory() as conn:
-            conn.row_factory = sqlite3.Row
-
-            query = """
-                SELECT *
-                FROM allocation_snapshots
-                WHERE user_id = ?
-                ORDER BY snapshot_date ASC
+        conn.execute(
             """
+            INSERT INTO allocation_snapshots (
+                user_id,
+                generated_at,
+                snapshot_date,
+                weights,
+                positions,
+                signals,
+                meta
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                snapshot_date,  # 🔥 beide Felder gesetzt
+                snapshot_date,
+                json.dumps(weights),
+                json.dumps(positions),
+                json.dumps(signals),
+                json.dumps(meta),
+            ),
+        )
 
-            params: list[Any] = [user_id]
+        conn.commit()
+        conn.close()
 
-            if limit is not None:
-                query += " LIMIT ?"
-                params.append(limit)
+    # ---------------------------------------------------
+    # READ ALL
+    # ---------------------------------------------------
 
-            rows = conn.execute(query, params).fetchall()
+    def get_snapshots_by_user(self, user_id: int) -> List[Dict[str, Any]]:
+        conn = sqlite3.connect(self.db_path)
 
-            results: list[dict[str, Any]] = []
+        cursor = conn.execute(
+            """
+            SELECT user_id, snapshot_date, weights, positions, signals, meta
+            FROM allocation_snapshots
+            WHERE user_id = ?
+            ORDER BY snapshot_date ASC
+            """,
+            (user_id,),
+        )
 
-            for row in rows:
-                record = dict(row)
+        rows = cursor.fetchall()
+        conn.close()
 
-                record["weights"] = self._safe_json_load(record.get("weights"))
-                record["positions"] = self._safe_json_load(record.get("positions"))
-                record["signals"] = self._safe_json_load(record.get("signals"))
-                record["meta"] = self._safe_json_load(record.get("meta"))
+        results = []
 
-                results.append(record)
+        for row in rows:
+            results.append(
+                {
+                    "user_id": row[0],
+                    "snapshot_date": row[1],
+                    "weights": json.loads(row[2]) if row[2] else {},
+                    "positions": json.loads(row[3]) if row[3] else [],
+                    "signals": json.loads(row[4]) if row[4] else [],
+                    "meta": json.loads(row[5]) if row[5] else {},
+                }
+            )
 
-            return results
+        return results
 
-    def get_latest_snapshot(self, user_id: int) -> dict[str, Any] | None:
-        snapshots = self.get_user_snapshots(user_id=user_id, limit=1)
-        return snapshots[-1] if snapshots else None
+    # ---------------------------------------------------
+    # READ LATEST
+    # ---------------------------------------------------
 
-    # =========================
-    # HELPERS
-    # =========================
+    def get_latest_snapshot(self, user_id: int) -> Optional[Dict[str, Any]]:
+        conn = sqlite3.connect(self.db_path)
 
-    def _safe_json_load(self, value: Any) -> Any:
-        if value is None:
+        cursor = conn.execute(
+            """
+            SELECT user_id, snapshot_date, weights, positions, signals, meta
+            FROM allocation_snapshots
+            WHERE user_id = ?
+            ORDER BY snapshot_date DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
             return None
 
-        if isinstance(value, (dict, list)):
-            return value
-
-        try:
-            return json.loads(value)
-        except Exception:
-            return value
+        return {
+            "user_id": row[0],
+            "snapshot_date": row[1],
+            "weights": json.loads(row[2]) if row[2] else {},
+            "positions": json.loads(row[3]) if row[3] else [],
+            "signals": json.loads(row[4]) if row[4] else [],
+            "meta": json.loads(row[5]) if row[5] else {},
+        }

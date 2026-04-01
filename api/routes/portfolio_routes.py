@@ -10,14 +10,21 @@ from api.schemas.performance_schema import (
     PortfolioHistoryResponseSchema,
     PortfolioPerformanceResponseSchema,
 )
+from live.services.allocation_snapshot_service import AllocationSnapshotService
 from services.portfolio_engine_service import PortfolioEngineService
 from services.portfolio_performance_adapter import PortfolioPerformanceAdapter
+from services.risk_adjusted_snapshot_service import RiskAdjustedSnapshotService
+from services.risk_aware_portfolio_engine_service import RiskAwarePortfolioEngineService
 from services.signal_ranking_service import SignalRankingService
 
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
 performance_adapter = PortfolioPerformanceAdapter()
+portfolio_service = PortfolioEngineService()
+risk_aware_engine = RiskAwarePortfolioEngineService()
+risk_adjusted_snapshot_service = RiskAdjustedSnapshotService()
+allocation_snapshot_service = AllocationSnapshotService()
 
 
 # =========================
@@ -89,18 +96,74 @@ def _extract_user_id(current_user) -> int:
     )
 
 
+def _convert_positions_to_allocations(portfolio: Dict[str, Any]) -> List[Dict[str, Any]]:
+    theme_map = {
+        "SPY": "equities",
+        "QQQ": "equities",
+        "IWM": "equities",
+        "IEF": "duration",
+        "TLT": "long_duration",
+        "GLD": "commodities",
+        "SHY": "cash",
+        "CASH": "cash",
+    }
+
+    allocations: List[Dict[str, Any]] = []
+
+    for position in portfolio.get("positions", []):
+        symbol = position["symbol"]
+        allocations.append(
+            {
+                "asset": symbol,
+                "theme": theme_map.get(symbol, "other"),
+                "weight": float(position["target_weight"]),
+            }
+        )
+
+    return allocations
+
+
+def _extract_current_drawdown(user_id: int) -> Optional[float]:
+    try:
+        result = performance_adapter.get_performance_for_user(
+            user_id=user_id,
+            force_recompute=False,
+        )
+        intelligence = getattr(result, "intelligence", None)
+        if intelligence and isinstance(intelligence, dict):
+            return float(intelligence.get("current_drawdown", 0.0))
+        return 0.0
+    except Exception:
+        return None
+
+
+def _persist_allocation_snapshot_to_db(
+    user_id: int,
+    portfolio_payload: Dict[str, Any],
+) -> None:
+    allocation_snapshot_service.persist_snapshot(
+        user_id=user_id,
+        portfolio=portfolio_payload,
+    )
+
+
 def _mask_free_performance_payload(result: Any) -> Dict[str, Any]:
+    summary = result.summary
+
+    if "base" in summary:
+        summary = summary["base"]
+
     return {
         "summary": {
-            "observations": result.summary["observations"],
-            "total_return": result.summary["total_return"],
-            "annualized_return": result.summary["annualized_return"],
+            "observations": summary["observations"],
+            "total_return": summary["total_return"],
+            "annualized_return": summary["annualized_return"],
             "volatility": 0.0,
             "sharpe_ratio": 0.0,
             "max_drawdown": 0.0,
-            "latest_value": result.summary["latest_value"],
-            "latest_period_return": result.summary["latest_period_return"],
-            "latest_cumulative_return": result.summary["latest_cumulative_return"],
+            "latest_value": summary["latest_value"],
+            "latest_period_return": summary["latest_period_return"],
+            "latest_cumulative_return": summary["latest_cumulative_return"],
         },
         "signal_accuracy": {
             "overall_hit_rate": 0.0,
@@ -118,84 +181,9 @@ def _mask_free_performance_payload(result: Any) -> Dict[str, Any]:
     }
 
 
-def _add_snapshot_comparison(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    if not history:
-        return history
-
-    chronological_history = sorted(history, key=lambda row: row["date"])
-
-    enriched_history: List[Dict[str, Any]] = []
-    previous_row: Optional[Dict[str, Any]] = None
-
-    for row in chronological_history:
-        current_row = dict(row)
-
-        if previous_row is None:
-            current_row["comparison"] = {
-                "value_change": 0.0,
-                "return_change": 0.0,
-                "drawdown_change": 0.0,
-            }
-        else:
-            current_row["comparison"] = {
-                "value_change": float(current_row["portfolio_value"] - previous_row["portfolio_value"]),
-                "return_change": float(current_row["cumulative_return"] - previous_row["cumulative_return"]),
-                "drawdown_change": float(current_row["drawdown"] - previous_row["drawdown"]),
-            }
-
-        enriched_history.append(current_row)
-        previous_row = current_row
-
-    return enriched_history
-
-
 # =========================
 # ROUTES
 # =========================
-
-@router.get("", response_model=PortfolioResponse)
-def get_portfolio(
-    persist_snapshot: bool = Query(True),
-    current_user=Depends(get_current_user),
-) -> Dict[str, Any]:
-
-    if not _is_premium_user(current_user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Premium subscription required",
-        )
-
-    user_id = _extract_user_id(current_user)
-
-    ranking_service = SignalRankingService()
-    portfolio_service = PortfolioEngineService()
-
-    try:
-        ranked_signals = ranking_service.get_ranked_signals(
-            user_id=user_id,
-            premium=True,
-        )
-
-        if ranked_signals is None:
-            ranked_signals = []
-
-        portfolio = portfolio_service.build_portfolio(
-            user_id=user_id,
-            ranked_signals=ranked_signals,
-            persist_snapshot=persist_snapshot,
-        )
-
-        return portfolio
-
-    except HTTPException:
-        raise
-
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Portfolio generation failed: {str(exc)}",
-        ) from exc
-
 
 @router.get("/performance", response_model=PortfolioPerformanceResponseSchema)
 def get_portfolio_performance(
@@ -215,8 +203,14 @@ def get_portfolio_performance(
         if not is_premium:
             return _mask_free_performance_payload(result)
 
+        # 🔥 FIX HIER (korrekt eingerückt)
+        summary = result.summary
+
+        if isinstance(summary, dict) and "base" in summary:
+            summary = summary["base"]
+
         return {
-            "summary": result.summary,
+            "summary": summary,
             "signal_accuracy": result.signal_accuracy,
             "intelligence": result.intelligence,
             "meta": result.meta,
@@ -229,42 +223,4 @@ def get_portfolio_performance(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Portfolio performance failed: {str(exc)}",
-        ) from exc
-
-
-@router.get("/history", response_model=PortfolioHistoryResponseSchema)
-def get_portfolio_history(
-    limit: int = Query(24, ge=1, le=120),
-    include_comparison: bool = Query(True),
-    current_user=Depends(get_current_user),
-) -> Dict[str, Any]:
-
-    user_id = _extract_user_id(current_user)
-    is_premium = _is_premium_user(current_user)
-
-    try:
-        result = performance_adapter.get_history_for_user(user_id=user_id)
-
-        history = sorted(result.history, key=lambda row: row["date"])
-
-        if is_premium:
-            history = history[-limit:]
-        else:
-            history = history[-6:]
-
-        if include_comparison:
-            history = _add_snapshot_comparison(history)
-
-        return {
-            "history": history,
-            "count": len(history),
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Portfolio history failed: {str(exc)}",
         ) from exc

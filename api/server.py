@@ -12,6 +12,8 @@ from api.routes.backtest_routes import router as backtest_router
 from api.routes.live.live_routes import router as live_router
 from api.routes.portfolio_routes import router as portfolio_router
 from api.routes.mapping_routes import router as mapping_router
+from api.routes.risk_overlay_routes import router as risk_overlay_router
+from api.routes.risk_score_routes import router as risk_score_router
 
 # SERVICES
 from services.inflation_service import InflationService
@@ -46,7 +48,8 @@ app.include_router(live_router)
 app.include_router(signal_ranking_router)
 app.include_router(portfolio_router)
 app.include_router(mapping_router)
-
+app.include_router(risk_overlay_router)
+app.include_router(risk_score_router)
 
 # ---------------------------------------------------
 # CORS
