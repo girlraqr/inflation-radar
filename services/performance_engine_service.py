@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from live.repository.allocation_repository import AllocationRepository
+from services.alpha_intelligence_service import AlphaIntelligenceService
 
 
 class PerformanceResult:
@@ -16,17 +17,20 @@ class PerformanceResult:
         signal_accuracy: Dict[str, Any],
         intelligence: Dict[str, Any],
         meta: Dict[str, Any],
+        alpha_intelligence: Dict[str, Any],  # 🔥 NEU
     ):
         self.summary = summary
         self.history = history
         self.signal_accuracy = signal_accuracy
         self.intelligence = intelligence
         self.meta = meta
+        self.alpha_intelligence = alpha_intelligence  # 🔥 NEU
 
 
 class PerformanceEngineService:
     def __init__(self, repository: Optional[AllocationRepository] = None):
         self.repository = repository or AllocationRepository()
+        self.alpha_service = AlphaIntelligenceService()  # 🔥 NEU
 
     # ---------------------------------------------------
     # MAIN
@@ -41,11 +45,10 @@ class PerformanceEngineService:
         snapshots = self.repository.get_snapshots_by_user(user_id)
 
         if not snapshots:
-            return PerformanceResult({}, [], {}, {}, {"source": "empty"})
+            return PerformanceResult({}, [], {}, {}, {"source": "empty"}, {})
 
         df = pd.DataFrame(snapshots)
 
-        # 🔥 FIX: robuste Datumsbehandlung
         if "snapshot_date" not in df.columns:
             if "generated_at" in df.columns:
                 df["snapshot_date"] = df["generated_at"]
@@ -54,15 +57,10 @@ class PerformanceEngineService:
         df = df.sort_values("snapshot_date")
 
         # ---------------------------------------------------
-        # BASE HISTORY
+        # HISTORY
         # ---------------------------------------------------
 
         base_history = self._build_portfolio_history(df)
-
-        # ---------------------------------------------------
-        # RISK HISTORY
-        # ---------------------------------------------------
-
         risk_history = self._build_risk_adjusted_history(df)
 
         # ---------------------------------------------------
@@ -76,7 +74,7 @@ class PerformanceEngineService:
             risk_summary = self._build_summary(risk_history)
 
         # ---------------------------------------------------
-        # ALPHA ANALYSIS (NEU)
+        # ALPHA (Phase 9.3.5)
         # ---------------------------------------------------
 
         alpha_analysis = {}
@@ -88,6 +86,16 @@ class PerformanceEngineService:
             )
 
         # ---------------------------------------------------
+        # 🔥 ALPHA INTELLIGENCE (Phase 9.4)
+        # ---------------------------------------------------
+
+        alpha_intelligence = self.alpha_service.build_alpha_intelligence(
+            base_history=base_history,
+            risk_history=risk_history,
+            snapshots_df=df,
+        )
+
+        # ---------------------------------------------------
         # RETURN
         # ---------------------------------------------------
 
@@ -95,7 +103,7 @@ class PerformanceEngineService:
             summary={
                 "base": base_summary,
                 "risk_adjusted": risk_summary,
-                "alpha_analysis": alpha_analysis,  # 🔥 NEU
+                "alpha_analysis": alpha_analysis,
             },
             history=base_history.to_dict(orient="records"),
             signal_accuracy={
@@ -114,6 +122,7 @@ class PerformanceEngineService:
                 "source": "db",
                 "observations": len(base_history),
             },
+            alpha_intelligence=alpha_intelligence,  # 🔥 NEU
         )
 
     # ---------------------------------------------------
@@ -131,7 +140,6 @@ class PerformanceEngineService:
             if isinstance(weights, str):
                 weights = json.loads(weights)
 
-            # 🔥 Dummy Return (ersetzen mit echten Returns später)
             period_return = sum(weights.values()) * 0.01
 
             portfolio_value *= (1.0 + period_return)
@@ -181,7 +189,6 @@ class PerformanceEngineService:
                 for item in allocations
             }
 
-            # 🔥 Dummy Return (ersetzen später)
             period_return = sum(weights.values()) * 0.008
 
             portfolio_value *= (1.0 + period_return)
@@ -233,7 +240,7 @@ class PerformanceEngineService:
         }
 
     # ---------------------------------------------------
-    # ALPHA ENGINE (NEU)
+    # ALPHA ENGINE (Phase 9.3.5)
     # ---------------------------------------------------
 
     def _compute_alpha_metrics(
@@ -254,7 +261,6 @@ class PerformanceEngineService:
         base_dd = float(base.get("max_drawdown", 0.0))
         risk_dd = float(risk.get("max_drawdown", 0.0))
 
-        # --- Core Metrics ---
         return_delta = risk_return - base_return
 
         volatility_reduction = (
@@ -265,7 +271,6 @@ class PerformanceEngineService:
             (base_dd - risk_dd) / base_dd if base_dd != 0 else 0.0
         )
 
-        # --- Efficiency ---
         denom = abs(volatility_reduction) + abs(drawdown_reduction)
         efficiency_score = return_delta / denom if denom != 0 else 0.0
 

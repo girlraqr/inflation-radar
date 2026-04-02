@@ -213,6 +213,7 @@ def get_portfolio_performance(
             "summary": result.summary,  # 🔥 GANZ WICHTIG → NICHT MEHR FLATTEN
             "signal_accuracy": result.signal_accuracy,
             "intelligence": result.intelligence,
+            "alpha_intelligence": result.alpha_intelligence,  # 🔥 NEU
             "meta": result.meta,
         }
 

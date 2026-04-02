@@ -15,6 +15,7 @@ class PortfolioPerformanceAdapterResult:
     signal_accuracy: dict[str, Any]
     intelligence: dict[str, Any]
     meta: dict[str, Any]
+    alpha_intelligence: dict[str, Any]  # 🔥 NEU
 
 
 class PortfolioPerformanceAdapter:
@@ -22,7 +23,6 @@ class PortfolioPerformanceAdapter:
         self.allocation_repository = AllocationRepository()
         self.performance_repository = PortfolioPerformanceRepository()
 
-        # 🔥 WICHTIG: KEIN repository=... mehr!
         self.performance_engine = PerformanceEngineService()
 
     # ---------------------------------------------------
@@ -35,9 +35,6 @@ class PortfolioPerformanceAdapter:
         force_recompute: bool = False,
     ) -> PortfolioPerformanceAdapterResult:
 
-        # -----------------------------------------
-        # Optional DB Cache (kannst du später wieder nutzen)
-        # -----------------------------------------
         if not force_recompute:
             db_payload = self.performance_repository.get_latest_summary_payload(
                 user_id=user_id
@@ -50,11 +47,9 @@ class PortfolioPerformanceAdapter:
                     signal_accuracy=db_payload["signal_accuracy"],
                     intelligence=db_payload["intelligence"],
                     meta=db_payload["meta"],
+                    alpha_intelligence=db_payload.get("alpha_intelligence", {}),  # 🔥 NEU
                 )
 
-        # -----------------------------------------
-        # 🔥 NEUE ENGINE (DB-driven)
-        # -----------------------------------------
         result = self.performance_engine.build_performance(
             user_id=user_id
         )
@@ -65,6 +60,7 @@ class PortfolioPerformanceAdapter:
             signal_accuracy=result.signal_accuracy,
             intelligence=result.intelligence,
             meta=result.meta,
+            alpha_intelligence=result.alpha_intelligence,  # 🔥 NEU
         )
 
     # ---------------------------------------------------
@@ -86,4 +82,5 @@ class PortfolioPerformanceAdapter:
             signal_accuracy=result.signal_accuracy,
             intelligence=result.intelligence,
             meta=result.meta,
+            alpha_intelligence=result.alpha_intelligence,  # 🔥 NEU
         )

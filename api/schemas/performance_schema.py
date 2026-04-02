@@ -86,6 +86,7 @@ class PortfolioPerformanceResponseSchema(BaseModel):
     summary: PortfolioPerformanceCompositeSummarySchema
     signal_accuracy: SignalAccuracySchema
     intelligence: IntelligenceOverlaySchema
+    alpha_intelligence: dict[str, Any] | None = None  # 🔥 NEU
     meta: dict[str, Any] | None = None
 
 
