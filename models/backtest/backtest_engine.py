@@ -1,13 +1,17 @@
 from __future__ import annotations
 print(">>> STABLE RANKING VERSION ACTIVE <<<")
+
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Optional
 
 import numpy as np
 import pandas as pd
 
-from models.backtest.allocation import DEFAULT_REGIME_ALLOCATION, RegimeAllocation
-from models.backtest.conviction import compute_conviction, scale_conviction
+from models.backtest.allocation import (
+    DEFAULT_REGIME_ALLOCATION,
+    RegimeAllocation,
+    build_probabilistic_regime_weights,
+)
 from models.backtest.portfolio_metrics import summarize_performance
 from models.backtest.regime_selector import (
     RegimeSelector,
@@ -16,6 +20,10 @@ from models.backtest.regime_selector import (
 )
 from models.backtest.regime_ranking import RegimeRankingEngine, RankingConfig
 
+
+# =========================================================
+# CONFIG
+# =========================================================
 
 @dataclass
 class BacktestConfig:
@@ -49,6 +57,14 @@ class BacktestConfig:
     ranking_lookback_months: int = 24
     ranking_min_history: int = 6
 
+    # Phase 10
+    smoothing_alpha: float = 0.30
+    mapper_temperature: float = 0.70
+
+
+# =========================================================
+# ENGINE
+# =========================================================
 
 class BacktestEngine:
     def __init__(
@@ -74,6 +90,10 @@ class BacktestEngine:
                 min_history=self.config.ranking_min_history,
             )
         )
+
+    # =========================================================
+    # MAIN RUN
+    # =========================================================
 
     def run(
         self,
@@ -133,23 +153,39 @@ class BacktestEngine:
             "metrics": metrics,
         }
 
+    # =========================================================
+    # PREP
+    # =========================================================
+
     def _prepare_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
+
         if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"])
+            df["date"] = pd.to_datetime(df["date"], utc=True)
             df = df.set_index("date")
         else:
-            df.index = pd.to_datetime(df.index)
+            df.index = pd.to_datetime(df.index, utc=True)
+
+        df.index = df.index.tz_convert(None)
+
         return df.sort_index()
 
     def _prepare_returns(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
+
         if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"])
+            df["date"] = pd.to_datetime(df["date"], utc=True)
             df = df.set_index("date")
         else:
-            df.index = pd.to_datetime(df.index)
+            df.index = pd.to_datetime(df.index, utc=True)
+
+        df.index = df.index.tz_convert(None)
+
         return df.sort_index().astype(float)
+
+    # =========================================================
+    # CORE
+    # =========================================================
 
     def _build_weight_frame(self, signals: pd.DataFrame, returns: pd.DataFrame) -> pd.DataFrame:
 
@@ -158,7 +194,21 @@ class BacktestEngine:
             regime_df = build_regime_frame(signals)
             return self.ranking_engine.build_top_n_weights(regime_df, returns)
 
-        return pd.DataFrame(0.0, index=returns.index, columns=returns.columns)
+        regime_df = signals.copy()
+
+        weights = build_probabilistic_regime_weights(
+            regime_df=regime_df,
+            regime_allocations=self.allocation,
+            assets=list(returns.columns),
+            smoothing_alpha=self.config.smoothing_alpha,
+            mapper_temperature=self.config.mapper_temperature,
+        )
+
+        return weights
+
+    # =========================================================
+    # VOL TARGETING
+    # =========================================================
 
     def _apply_vol_targeting(self, weights, returns):
         if not self.config.use_vol_targeting:

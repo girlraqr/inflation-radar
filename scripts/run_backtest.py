@@ -16,9 +16,10 @@ def main() -> None:
     for k, v in result["metrics"].items():
         print(f"{k}: {v}")
 
-    print("\n=== REGIME BREAKDOWN ===")
-    for regime, stats in result["regime_breakdown"].items():
-        print(regime, stats)
+    if "regime_breakdown" in result:
+        print("\n=== REGIME BREAKDOWN ===")
+        for regime, stats in result["regime_breakdown"].items():
+            print(regime, stats)
 
     result["timeseries"].to_csv("storage/cache/backtest_timeseries.csv", index=False)
     result["weights"].to_csv("storage/cache/backtest_weights.csv", index=False)

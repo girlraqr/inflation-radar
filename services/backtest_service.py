@@ -20,16 +20,27 @@ class BacktestService:
                 signal_lag_periods=1,
                 risk_free_rate=0.0,
 
-                # 🔥 TEST SETUP (Alpha Isolation)
+                # 🔥 Phase 10 PARAMS (HIER FEHLT ES!)
+                smoothing_alpha=0.25,
+                mapper_temperature=0.70,
+
+                # 🔥 TEST SETUP
                 conviction_method="power",
                 conviction_floor=0.35,
 
-                # optional (für spätere Tests)
+                # optional
                 conviction_exponent=1.3,
                 logistic_k=10.0,
                 logistic_threshold=0.3,
             ),
         )
+
+    def run_backtest(
+        self,
+        signals_df: pd.DataFrame,
+        returns_df: pd.DataFrame,
+    ) -> dict:
+        return self.engine.run(signals_df=signals_df, returns_df=returns_df)
 
     def run_backtest(
         self,

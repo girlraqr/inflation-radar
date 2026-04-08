@@ -34,4 +34,10 @@ def run_test(user_id: int = 1, snapshot_date: str = "2025-12-31"):
 
 
 if __name__ == "__main__":
+    run_test(user_id=1, snapshot_date="2025-10-01")
+    run_test(user_id=1, snapshot_date="2025-11-01")
+    run_test(user_id=1, snapshot_date="2025-12-01")
+    run_test(user_id=1, snapshot_date="2026-01-01")
+    run_test(user_id=1, snapshot_date="2026-02-01")
+    run_test(user_id=1, snapshot_date="2026-03-01")
     run_test()

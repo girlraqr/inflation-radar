@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-import math
+import pandas as pd
 
 
 @dataclass
@@ -28,7 +28,7 @@ class SignalRankingService:
     NEUTRAL_WORDS = {"hold", "neutral", "market_weight", "flat"}
 
     # =========================================================
-    # 🔥 PORTFOLIO ENTRYPOINT
+    # 🔥 LIVE ENTRYPOINT (UNVERÄNDERT)
     # =========================================================
 
     def get_ranked_signals(
@@ -58,7 +58,91 @@ class SignalRankingService:
         return results
 
     # =========================================================
-    # 🔧 TEMP DATA (ersetzen später)
+    # 🔥 HISTORICAL ENTRYPOINT (PHASE 9.9 CORE)
+    # =========================================================
+
+    def get_ranked_signals_for_date(
+        self,
+        user_id: int,
+        as_of_date: str,
+        premium: bool = True,
+    ) -> List[Dict[str, Any]]:
+
+        df = pd.read_csv("storage/cache/signal_history.csv")
+        df["date"] = pd.to_datetime(df["date"])
+
+        target = pd.to_datetime(as_of_date)
+
+        df = df[df["date"] <= target]
+
+        if df.empty:
+            raise ValueError(f"No signal history before {as_of_date}")
+
+        row = df.iloc[-1]
+
+        # ---------------------------------------------------
+        # 🔥 REGIME NORMALIZATION (DER WICHTIGE FIX)
+        # ---------------------------------------------------
+
+        raw_regime = str(row["regime"]).lower()
+
+        if "reflation" in raw_regime:
+            regime = "REFLATION"
+
+        elif "disinflation_strong" in raw_regime:
+            regime = "DEFLATION"
+
+        elif "short_term_disinflation" in raw_regime:
+            regime = "STAGFLATION"
+
+        elif "inflation_bottoming" in raw_regime:
+            regime = "GOLDILOCKS"
+
+        else:
+            regime = "NEUTRAL"
+
+        # ---------------------------------------------------
+        # REGIME → ASSET MAPPING
+        # ---------------------------------------------------
+
+        if regime == "REFLATION":
+            ranking = ["SPY", "DBC", "XLE"]
+
+        elif regime == "STAGFLATION":
+            ranking = ["GLD", "DBC", "TIP"]
+
+        elif regime == "GOLDILOCKS":
+            ranking = ["SPY", "XLF", "QQQ"]
+
+        elif regime == "DEFLATION":
+            ranking = ["IEF", "TLT", "GLD"]
+
+        else:
+            ranking = ["SPY", "IEF", "GLD"]
+
+        # ---------------------------------------------------
+        # BUILD OUTPUT
+        # ---------------------------------------------------
+
+        results: List[Dict[str, Any]] = []
+
+        for i, asset in enumerate(ranking):
+            results.append(
+                {
+                    "symbol": asset,
+                    "score": round(1.0 - (i * 0.1), 4),
+                    "confidence": 0.7,
+                    "direction": "historical_regime",
+                    "forecast": None,
+                    "asset_name": asset,
+                    "asset_class": regime,
+                }
+            )
+
+        return results
+
+    # =========================================================
+    # 🔧 TEMP DATA (wird später ersetzt)
     # =========================================================
 
     def _load_raw_signals(self, user_id: int) -> List[Dict[str, Any]]:
@@ -167,7 +251,7 @@ class SignalRankingService:
         return 0.04
 
     # =========================================================
-    # HELPERS (WICHTIG!)
+    # HELPERS
     # =========================================================
 
     def _first_str(self, data: Dict[str, Any], keys: List[str], default: str) -> str:
