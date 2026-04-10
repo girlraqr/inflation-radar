@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 print(">>> STABLE RANKING VERSION ACTIVE <<<")
 
 from dataclasses import dataclass
@@ -13,17 +14,18 @@ from models.backtest.allocation import (
     build_probabilistic_regime_weights,
 )
 from models.backtest.portfolio_metrics import summarize_performance
+from models.backtest.regime_ranking import RegimeRankingEngine, RankingConfig
 from models.backtest.regime_selector import (
     RegimeSelector,
     RegimeSelectorConfig,
     build_regime_frame,
 )
-from models.backtest.regime_ranking import RegimeRankingEngine, RankingConfig
 
 
 # =========================================================
 # CONFIG
 # =========================================================
+
 
 @dataclass
 class BacktestConfig:
@@ -32,10 +34,15 @@ class BacktestConfig:
     prob_3m_col: str = "prob_3m"
     prob_6m_col: str = "prob_6m"
 
-    transaction_cost_bps: float = 5.0
     periods_per_year: int = 12
     signal_lag_periods: int = 1
     risk_free_rate: float = 0.0
+
+    
+    # Costs (UI-ready, in basis points)
+    transaction_cost_bps: float = 5.0   # 0.05%
+    slippage_bps: float = 0.0           # optional additional cost
+    include_costs: bool = True
 
     use_conviction_scaling: bool = True
     conviction_floor: float = 0.35
@@ -57,14 +64,16 @@ class BacktestConfig:
     ranking_lookback_months: int = 24
     ranking_min_history: int = 6
 
-    # Phase 10
+    # Phase 10 / 10.4
     smoothing_alpha: float = 0.30
+    gamma: float = 1.35   # 🔥 NEU
     mapper_temperature: float = 0.70
 
 
 # =========================================================
 # ENGINE
 # =========================================================
+
 
 class BacktestEngine:
     def __init__(
@@ -118,7 +127,8 @@ class BacktestEngine:
         portfolio_returns = aligned_returns.copy()
 
         portfolio_weights, leverage = self._apply_vol_targeting(
-            portfolio_weights, portfolio_returns
+            portfolio_weights,
+            portfolio_returns,
         )
 
         gross_returns = (portfolio_weights * portfolio_returns).sum(axis=1)
@@ -127,15 +137,33 @@ class BacktestEngine:
             portfolio_weights.abs().sum(axis=1)
         )
 
-        tc = turnover * (self.config.transaction_cost_bps / 10000.0)
-        net_returns = gross_returns - tc
+        transaction_cost_rate = self.config.transaction_cost_bps / 10000.0
+        slippage_cost_rate = self.config.slippage_bps / 10000.0
 
-        equity_curve = (1.0 + net_returns).cumprod()
+        if self.config.include_costs:
+            transaction_cost_series = turnover * transaction_cost_rate
+            slippage_cost_series = turnover * slippage_cost_rate
+        else:
+            transaction_cost_series = pd.Series(0.0, index=turnover.index)
+            slippage_cost_series = pd.Series(0.0, index=turnover.index)
+
+        total_cost_series = transaction_cost_series + slippage_cost_series
+        net_returns = gross_returns - total_cost_series
+
+        equity_curve_gross = (1.0 + gross_returns).cumprod()
+        equity_curve_net = (1.0 + net_returns).cumprod()
 
         result_frame = pd.DataFrame(
             {
+                "portfolio_gross_return": gross_returns,
+                "transaction_cost": transaction_cost_series,
+                "slippage_cost": slippage_cost_series,
+                "total_cost": total_cost_series,
                 "portfolio_net_return": net_returns,
-                "equity_curve": equity_curve,
+                "equity_curve_gross": equity_curve_gross,
+                "equity_curve": equity_curve_net,
+                "turnover": turnover,
+                "leverage": leverage.reindex(gross_returns.index).fillna(1.0),
             },
             index=aligned_returns.index,
         )
@@ -145,6 +173,34 @@ class BacktestEngine:
             turnover=turnover,
             periods_per_year=self.config.periods_per_year,
             risk_free_rate=self.config.risk_free_rate,
+        )
+
+        total_transaction_cost = float(transaction_cost_series.sum())
+        total_slippage_cost = float(slippage_cost_series.sum())
+        total_cost = float(total_cost_series.sum())
+        avg_transaction_cost = float(transaction_cost_series.mean())
+        avg_slippage_cost = float(slippage_cost_series.mean())
+        avg_total_cost = float(total_cost_series.mean())
+
+        total_gross_return = float(equity_curve_gross.iloc[-1] - 1.0) if len(equity_curve_gross) else 0.0
+        total_net_return = float(equity_curve_net.iloc[-1] - 1.0) if len(equity_curve_net) else 0.0
+        cost_drag = total_gross_return - total_net_return
+
+        metrics.update(
+            {
+                "total_gross_return": total_gross_return,
+                "total_net_return": total_net_return,
+                "total_transaction_cost": total_transaction_cost,
+                "total_slippage_cost": total_slippage_cost,
+                "total_cost": total_cost,
+                "avg_transaction_cost": avg_transaction_cost,
+                "avg_slippage_cost": avg_slippage_cost,
+                "avg_total_cost": avg_total_cost,
+                "cost_drag": cost_drag,
+                "transaction_cost_bps": float(self.config.transaction_cost_bps),
+                "slippage_bps": float(self.config.slippage_bps),
+                "costs_enabled": bool(self.config.include_costs),
+            }
         )
 
         return {
@@ -187,7 +243,11 @@ class BacktestEngine:
     # CORE
     # =========================================================
 
-    def _build_weight_frame(self, signals: pd.DataFrame, returns: pd.DataFrame) -> pd.DataFrame:
+    def _build_weight_frame(
+        self,
+        signals: pd.DataFrame,
+        returns: pd.DataFrame,
+    ) -> pd.DataFrame:
 
         if self.config.use_regime_ranking:
             print(">>> USING REGIME RANKING <<<")
@@ -202,6 +262,7 @@ class BacktestEngine:
             assets=list(returns.columns),
             smoothing_alpha=self.config.smoothing_alpha,
             mapper_temperature=self.config.mapper_temperature,
+            config=self.config,  # 🔥 DAS ist der Schlüssel
         )
 
         return weights
@@ -210,7 +271,11 @@ class BacktestEngine:
     # VOL TARGETING
     # =========================================================
 
-    def _apply_vol_targeting(self, weights, returns):
+    def _apply_vol_targeting(
+        self,
+        weights: pd.DataFrame,
+        returns: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, pd.Series]:
         if not self.config.use_vol_targeting:
             return weights, pd.Series(1.0, index=weights.index)
 
