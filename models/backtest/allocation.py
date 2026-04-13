@@ -10,6 +10,10 @@ from models.backtest.regime_probability_mapper import (
     MultiRegimeProbabilityMapper,
 )
 from models.backtest.regime_ranking import RegimeRankingEngine, RankingConfig
+from models.backtest.sharpe_booster import (
+    SharpeBoosterConfig,
+    apply_sharpe_booster,
+)
 
 
 # --------------------------------------------------
@@ -97,7 +101,7 @@ def build_probabilistic_regime_weights(
     smoothing_alpha: float = 0.25,
     mapper_temperature: float = 0.70,
     mapper: Optional[MultiRegimeProbabilityMapper] = None,
-    config=None,  # 🔥 NEW
+    config=None,
 ) -> pd.DataFrame:
 
     print(">>> SMOOTHING ALPHA USED:", smoothing_alpha)
@@ -105,7 +109,6 @@ def build_probabilistic_regime_weights(
     weights = pd.DataFrame(0.0, index=regime_df.index, columns=assets)
 
     all_regimes = list(regime_allocations.regime_to_weights.keys())
-
     alpha = max(0.0, min(1.0, float(smoothing_alpha)))
 
     regime_mapper = mapper or MultiRegimeProbabilityMapper(
@@ -113,17 +116,39 @@ def build_probabilistic_regime_weights(
     )
 
     prev_probs = {r: 1.0 / len(all_regimes) for r in all_regimes}
-
     INERTIA = 0.15
 
-    # 🔥 GAMMA jetzt aus Config
     if config is not None and hasattr(config, "gamma"):
         gamma = config.gamma
     else:
-        gamma = 1.35  # fallback
+        gamma = 1.35
+
+    # Phase 2 Booster
+    booster_config = SharpeBoosterConfig(
+        enabled=True,
+        min_prob=0.50,
+        max_prob=0.90,
+        min_scale=0.00,
+        mid_scale=1.00,
+        max_scale=1.20,
+        curve_power=1.35,
+        use_prob_6m_confirmation=True,
+        prob_6m_penalty_threshold=0.45,
+        prob_6m_penalty_scale=0.92,
+        use_horizon_disagreement_penalty=False,
+        disagreement_threshold=0.20,
+        disagreement_penalty_scale=0.80,
+        use_uncertainty_penalty=True,
+        uncertainty_floor=0.35,
+        uncertainty_ceiling=0.75,
+        uncertainty_min_scale=0.78,
+        uncertainty_max_scale=1.05,
+        residual_asset="cash",
+        min_leverage=0.0,
+        max_leverage=1.60,
+    )
 
     for dt, row in regime_df.iterrows():
-
         raw_probs = regime_mapper.map_row_to_probabilities(
             row=row,
             allowed_regimes=all_regimes,
@@ -132,7 +157,6 @@ def build_probabilistic_regime_weights(
         # -----------------------------
         # SMOOTHING + INERTIA
         # -----------------------------
-
         smoothed = {}
         for r in all_regimes:
             base = alpha * raw_probs.get(r, 0.0) + (1 - alpha) * prev_probs[r]
@@ -143,30 +167,26 @@ def build_probabilistic_regime_weights(
         # -----------------------------
         # GAMMA BLENDING
         # -----------------------------
-
         adjusted = {r: pow(p, gamma) for r, p in smoothed.items()}
         adjusted = _normalize_probabilities(adjusted)
-
         prev_probs = adjusted.copy()
 
         # -----------------------------
-        # CONFIDENCE SCALING
+        # EXISTING CONFIDENCE SCALING
         # -----------------------------
-
-        confidence = max(adjusted.values())
+        regime_confidence = max(adjusted.values())
 
         FLOOR, CEIL = 0.50, 0.85
         MIN_S, MAX_S = 0.85, 1.15
 
-        c = max(FLOOR, min(CEIL, confidence))
+        c = max(FLOOR, min(CEIL, regime_confidence))
         norm = (c - FLOOR) / (CEIL - FLOOR)
         scale = MIN_S + norm * (MAX_S - MIN_S)
 
         # -----------------------------
         # WEIGHT AGGREGATION
         # -----------------------------
-
-        combined = {}
+        combined: Dict[str, float] = {}
 
         for r, prob in adjusted.items():
             alloc = regime_allocations.get_weights(r)
@@ -175,6 +195,24 @@ def build_probabilistic_regime_weights(
             for a, w in alloc.items():
                 combined[a] = combined.get(a, 0.0) + prob * w * scale
 
+        # -----------------------------
+        # PHASE 2 SHARPE BOOSTER
+        # -----------------------------
+        signal_row = {
+            "prob_3m": row.get("prob_3m", 0.0),
+            "prob_6m": row.get("prob_6m", 0.0),
+            "regime_confidence": regime_confidence,
+        }
+
+        combined = apply_sharpe_booster(
+            weights=combined,
+            signal_row=signal_row,
+            config=booster_config,
+        )
+
+        # -----------------------------
+        # WRITE TO DF
+        # -----------------------------
         for a, w in combined.items():
             if a in weights.columns:
                 weights.at[dt, a] = w

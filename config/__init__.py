@@ -1,0 +1,1 @@
+from core_config import settings, FRED_API_KEY, FRED_SERIES

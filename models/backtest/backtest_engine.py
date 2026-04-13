@@ -13,6 +13,10 @@ from models.backtest.allocation import (
     RegimeAllocation,
     build_probabilistic_regime_weights,
 )
+from models.backtest.drawdown_guard import (
+    DrawdownGuardConfig,
+    DrawdownGuardState,
+)
 from models.backtest.portfolio_metrics import summarize_performance
 from models.backtest.regime_ranking import RegimeRankingEngine, RankingConfig
 from models.backtest.regime_selector import (
@@ -38,7 +42,6 @@ class BacktestConfig:
     signal_lag_periods: int = 1
     risk_free_rate: float = 0.0
 
-    
     # Costs (UI-ready, in basis points)
     transaction_cost_bps: float = 5.0   # 0.05%
     slippage_bps: float = 0.0           # optional additional cost
@@ -66,8 +69,16 @@ class BacktestConfig:
 
     # Phase 10 / 10.4
     smoothing_alpha: float = 0.30
-    gamma: float = 1.35   # 🔥 NEU
+    gamma: float = 1.35
     mapper_temperature: float = 0.70
+
+    # Drawdown Guard
+    drawdown_guard_enabled: bool = True
+    drawdown_mild_threshold: float = -0.06
+    drawdown_severe_threshold: float = -0.12
+    drawdown_mild_scale: float = 0.85
+    drawdown_severe_scale: float = 0.65
+    drawdown_recovery_threshold: float = -0.03
 
 
 # =========================================================
@@ -131,42 +142,20 @@ class BacktestEngine:
             portfolio_returns,
         )
 
-        gross_returns = (portfolio_weights * portfolio_returns).sum(axis=1)
-
-        turnover = portfolio_weights.diff().abs().sum(axis=1).fillna(
-            portfolio_weights.abs().sum(axis=1)
+        result_frame = self._run_with_drawdown_guard(
+            portfolio_weights=portfolio_weights,
+            portfolio_returns=portfolio_returns,
+            leverage=leverage,
         )
 
-        transaction_cost_rate = self.config.transaction_cost_bps / 10000.0
-        slippage_cost_rate = self.config.slippage_bps / 10000.0
-
-        if self.config.include_costs:
-            transaction_cost_series = turnover * transaction_cost_rate
-            slippage_cost_series = turnover * slippage_cost_rate
-        else:
-            transaction_cost_series = pd.Series(0.0, index=turnover.index)
-            slippage_cost_series = pd.Series(0.0, index=turnover.index)
-
-        total_cost_series = transaction_cost_series + slippage_cost_series
-        net_returns = gross_returns - total_cost_series
-
-        equity_curve_gross = (1.0 + gross_returns).cumprod()
-        equity_curve_net = (1.0 + net_returns).cumprod()
-
-        result_frame = pd.DataFrame(
-            {
-                "portfolio_gross_return": gross_returns,
-                "transaction_cost": transaction_cost_series,
-                "slippage_cost": slippage_cost_series,
-                "total_cost": total_cost_series,
-                "portfolio_net_return": net_returns,
-                "equity_curve_gross": equity_curve_gross,
-                "equity_curve": equity_curve_net,
-                "turnover": turnover,
-                "leverage": leverage.reindex(gross_returns.index).fillna(1.0),
-            },
-            index=aligned_returns.index,
-        )
+        gross_returns = result_frame["portfolio_gross_return"]
+        turnover = result_frame["turnover"]
+        transaction_cost_series = result_frame["transaction_cost"]
+        slippage_cost_series = result_frame["slippage_cost"]
+        total_cost_series = result_frame["total_cost"]
+        net_returns = result_frame["portfolio_net_return"]
+        equity_curve_gross = result_frame["equity_curve_gross"]
+        equity_curve_net = result_frame["equity_curve"]
 
         metrics = summarize_performance(
             returns=net_returns,
@@ -262,7 +251,7 @@ class BacktestEngine:
             assets=list(returns.columns),
             smoothing_alpha=self.config.smoothing_alpha,
             mapper_temperature=self.config.mapper_temperature,
-            config=self.config,  # 🔥 DAS ist der Schlüssel
+            config=self.config,
         )
 
         return weights
@@ -291,3 +280,85 @@ class BacktestEngine:
         leverage = leverage.clip(0.5, self.config.max_leverage)
 
         return weights.mul(leverage, axis=0), leverage
+
+    # =========================================================
+    # DRAWDOWN GUARD
+    # =========================================================
+
+    def _run_with_drawdown_guard(
+        self,
+        portfolio_weights: pd.DataFrame,
+        portfolio_returns: pd.DataFrame,
+        leverage: pd.Series,
+    ) -> pd.DataFrame:
+        drawdown_guard = DrawdownGuardState(
+            DrawdownGuardConfig(
+                enabled=self.config.drawdown_guard_enabled,
+                mild_drawdown_threshold=self.config.drawdown_mild_threshold,
+                severe_drawdown_threshold=self.config.drawdown_severe_threshold,
+                mild_exposure_scale=self.config.drawdown_mild_scale,
+                severe_exposure_scale=self.config.drawdown_severe_scale,
+                recovery_drawdown_threshold=self.config.drawdown_recovery_threshold,
+            )
+        )
+
+        transaction_cost_rate = self.config.transaction_cost_bps / 10000.0
+        slippage_cost_rate = self.config.slippage_bps / 10000.0
+
+        equity_gross = 1.0
+        equity_net = 1.0
+
+        prev_effective_weights = None
+        rows = []
+
+        for dt in portfolio_weights.index:
+            base_weight_row = portfolio_weights.loc[dt].fillna(0.0)
+            return_row = portfolio_returns.loc[dt].fillna(0.0)
+
+            guard_scale = drawdown_guard.get_scale()
+            effective_weights = base_weight_row * guard_scale
+
+            gross_return = float((effective_weights * return_row).sum())
+
+            if prev_effective_weights is None:
+                turnover = float(effective_weights.abs().sum())
+            else:
+                turnover = float((effective_weights - prev_effective_weights).abs().sum())
+
+            if self.config.include_costs:
+                transaction_cost = turnover * transaction_cost_rate
+                slippage_cost = turnover * slippage_cost_rate
+            else:
+                transaction_cost = 0.0
+                slippage_cost = 0.0
+
+            total_cost = transaction_cost + slippage_cost
+            net_return = gross_return - total_cost
+
+            equity_gross *= (1.0 + gross_return)
+            equity_net *= (1.0 + net_return)
+
+            drawdown_guard.update(equity_net)
+            current_guard_drawdown = drawdown_guard.get_drawdown()
+
+            rows.append(
+                {
+                    "date": dt,
+                    "portfolio_gross_return": gross_return,
+                    "transaction_cost": transaction_cost,
+                    "slippage_cost": slippage_cost,
+                    "total_cost": total_cost,
+                    "portfolio_net_return": net_return,
+                    "equity_curve_gross": equity_gross,
+                    "equity_curve": equity_net,
+                    "turnover": turnover,
+                    "leverage": float(leverage.reindex([dt]).fillna(1.0).iloc[0]),
+                    "drawdown_guard_scale": guard_scale,
+                    "drawdown_guard_drawdown": current_guard_drawdown,
+                }
+            )
+
+            prev_effective_weights = effective_weights.copy()
+
+        result_frame = pd.DataFrame(rows).set_index("date")
+        return result_frame
