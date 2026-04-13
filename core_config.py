@@ -13,10 +13,10 @@ load_dotenv()
 # FRED API
 # --------------------------------------------------
 
-FRED_API_KEY = os.getenv(
-    "FRED_API_KEY",
-    "e8f4311537ce3912928fcea4d0a27e66"
-)
+FRED_API_KEY = os.getenv("FRED_API_KEY")
+
+if not FRED_API_KEY:
+    raise ValueError("FRED_API_KEY is not set in environment variables")
 
 
 # --------------------------------------------------
